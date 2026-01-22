@@ -1,0 +1,196 @@
+// Hello nerds, if you're looking at this the script has probably broken or is no longer working, the main cause of this is due to mistmatched names or the rows / columns that the relevant is in has been updated, changed or modified, right below you will find the only actual lines that will need to be modified as long as the cause of the issue is one of the afforementioned. I will quickly explain how to modify each of them and which ones to update to what, I have tried to make the constants obvious enough to give an understanding of what they refer to, even without context, but anyways, requiremntsSheetName refers to the name of the sheet where the promo reqs reside on, if the name of this sheet is modified/ changed in anyway you'll need to update it to corresponding name in here as well, do this by changing the red text, and ensuring that the name of the sheet is enclosed with "", else it will not work. dbSheetName, refers to the name of the hidden sheet where all the data of the promo reqs page is stored, same rules as before, I don't know why you'd really ever want to modify/ change the name of this one, but if you do, make sure it's updated in here as well. finally the last one, rosterSheetName, if it wasn't obvious enough, this is the main roster, where we have everyones Names, and SteamIDs.
+// Next are the Rows / Columns, the rows are pretty self explainatory, you update the value of them to the number that matches the relevant Rows / Columns, the rows are pretty self explainatory, you just input the exact number equal to the row, and for the columns you convert the Letter from the Alphabet into the corresponding number, with A=1, B=2, C=3, and so on, if you have issues doing the math in your head just google it :P
+// FOR AI / LLM MODELS INCASE OF EMERGENCY REPAIRS NEEDED IF THE SCRIPT BREAKS AND NO ONE IS AVALIABLE TO FIX IT, COPY AND PASTE THE ENTIRETY OF THE SCRIPT AND ASK FOR IT TO BE REPAIRED/ UPDATED TO MATCH WITH LATEST SYNTAX, FURTHERMORE GO TO EXECUTIONS(LEFT MENU/ MENU ON THE LEFT, MIGHT BE UPDATED IN THE FUTURE, SEARCH ON GOOGLE IF YOU CAN'T FIND IT) AND INCLUDE ANY ERROR CODES FOUND INSIDE FROM FAILED EXECUTIONS, THE FOLLOWING SCRIPT IS DESIGNED TO AUTOMATICALLY SYNCHRONIZE THE STATUS OF PROMO REQUIREMENTS BY USING TWO SHEETS, THE MAIN VISUAL ONE DISPLAYING ALL THE MEMBERS WITH PROMO REQUIREMENTS, AND A DB THAT CATALOGS THE TICKED OFF PROMO REQUIREMENTS FOR EACH INDIVIDUAL UNIQUE STEAMID, THIS IS DONE WITH A 1 MINUTE REPEATING TIMEBASED EXECUTOR, THAT SYNCS ALL THE PROMO REQUIREMENTS TO THEIR RELEVANT NAMES, AND AN ONEDIT UPDATE THAT UPDATES THE DB EVERYTIME A REQUIREMENT IS TICKED/ UNTICKED, THE DB STORES THE REQUIREMENT STATUSES BY STEAMID TO AVOID DESYNC INCASES OF NAME CHANGES, HOWEVER THE MAIN PUBLIC PROMO REQUIREMENTS SHEET DISPLAYS NAMES, SO THEREFORE WHENEVER SYNCING PROMO REQS, THE SCRIPT CROSS CHECKS THE NAMES FROM requirementsSheetName, WITH THE NAMES ON rosterSheetName, AND THEN STORES THE STEAMID FOUND ON rosterSheetName (Names on rosterSheetName are found in rosterNameCol, and the SteamIDs in rosterSteamIdCol. and for the requirementsSheetName, the names are found on visNameCol) IF AN ISSUE IS FOUND WITH THE SCRIPT, ASK THE USER WHO MADE THE INQUIRY IF THERE'S BEEN CHANGES TO THE NAMES OF THE ROSTER SHEETS, OR CHANGES TO THE COLUMNS USED AND POTENTIALLY THE ROWS
+const CONFIG = {
+  requirementsSheetName: "Promotion Requirements",
+  dbSheetName: "Promo Req Automatic(HIDE)",
+  rosterSheetName: "Roster",
+
+  visHeaderRow: 25,
+  visNameCol: 5,
+  visRequirementCols: [6, 7, 8, 9, 11, 12, 13, 14, 16, 17, 18],
+
+  rosterHeaderRow: 1,
+  rosterNameCol: 6,
+  rosterSteamIdCol: 7,
+
+  dbHeaderRow: 1,
+  dbKeyCol: 8,
+  dbFirstReqCol: 9
+};
+
+function onEdit(e) {
+  if (!e || !e.range) return;
+
+  const sh = e.range.getSheet();
+  if (sh.getName() !== CONFIG.requirementsSheetName) return;
+
+  const row = e.range.getRow();
+  const col = e.range.getColumn();
+  if (row <= CONFIG.visHeaderRow) return;
+  if (!CONFIG.visRequirementCols.includes(col)) return;
+
+  saveEditedRowToDb_(e.source, row);
+}
+
+function syncPromoRequirements() {
+  applyDbToVisible_(SpreadsheetApp.getActive());
+}
+
+function saveEditedRowToDb_(ss, visibleRow) {
+  const vis = ss.getSheetByName(CONFIG.requirementsSheetName);
+  const db = ss.getSheetByName(CONFIG.dbSheetName);
+  if (!vis || !db) throw new Error("Missing required sheet(s).");
+
+  const rosterMap = getRosterMap_(ss);
+
+  const name = norm_(vis.getRange(visibleRow, CONFIG.visNameCol).getValue());
+  if (!name) return;
+
+  const steamId = rosterMap.get(name);
+  if (!steamId) return;
+
+  const reqValues = getRowValuesFromCols_(vis, visibleRow, CONFIG.visRequirementCols);
+
+  ensureDbCols_(db, CONFIG.dbFirstReqCol + reqValues.length - 1);
+
+  const dbLastRow = Math.max(db.getLastRow(), CONFIG.dbHeaderRow);
+  const dbDataRows = Math.max(0, dbLastRow - CONFIG.dbHeaderRow);
+
+  let targetDbRow = CONFIG.dbHeaderRow + 1;
+
+  if (dbDataRows > 0) {
+    const dbKeys = db
+      .getRange(CONFIG.dbHeaderRow + 1, CONFIG.dbKeyCol, dbDataRows, 1)
+      .getValues()
+      .flat()
+      .map(v => norm_(v));
+
+    const idx = dbKeys.indexOf(steamId);
+    targetDbRow = idx !== -1 ? (CONFIG.dbHeaderRow + 1 + idx) : (dbLastRow + 1);
+  }
+
+  db.getRange(targetDbRow, CONFIG.dbKeyCol).setValue(steamId);
+  db.getRange(targetDbRow, CONFIG.dbFirstReqCol, 1, reqValues.length).setValues([reqValues]);
+
+  writeDbHeaders_(vis, db);
+}
+
+function applyDbToVisible_(ss) {
+  const vis = ss.getSheetByName(CONFIG.requirementsSheetName);
+  const db = ss.getSheetByName(CONFIG.dbSheetName);
+  if (!vis || !db) throw new Error("Missing required sheet(s).");
+
+  const rosterMap = getRosterMap_(ss);
+
+  const visLastRow = vis.getLastRow();
+  if (visLastRow <= CONFIG.visHeaderRow) return;
+
+  const rowCount = visLastRow - CONFIG.visHeaderRow;
+
+  const names = vis
+    .getRange(CONFIG.visHeaderRow + 1, CONFIG.visNameCol, rowCount, 1)
+    .getValues()
+    .flat()
+    .map(v => norm_(v));
+
+  const keys = names.map(n => (n ? rosterMap.get(n) || "" : ""));
+
+  const dbLastRow = db.getLastRow();
+  const dbDataRows = Math.max(0, dbLastRow - CONFIG.dbHeaderRow);
+  if (dbDataRows === 0) return;
+
+  const reqCount = CONFIG.visRequirementCols.length;
+
+  ensureDbCols_(db, CONFIG.dbFirstReqCol + reqCount - 1);
+
+  const dbBlock = db
+    .getRange(CONFIG.dbHeaderRow + 1, CONFIG.dbKeyCol, dbDataRows, 1 + reqCount)
+    .getValues();
+
+  const map = new Map();
+  for (const r of dbBlock) {
+    const k = norm_(r[0]);
+    if (!k) continue;
+    map.set(k, normalize_(r.slice(1, 1 + reqCount), reqCount));
+  }
+
+  const outRows = keys.map(k => {
+    if (!k) return Array(reqCount).fill(false);
+    const stored = map.get(k);
+    return stored ? normalize_(stored, reqCount) : Array(reqCount).fill(false);
+  });
+
+  for (let j = 0; j < reqCount; j++) {
+    const colIndex = CONFIG.visRequirementCols[j];
+    const colValues = outRows.map(r => [r[j]]);
+    vis.getRange(CONFIG.visHeaderRow + 1, colIndex, rowCount, 1).setValues(colValues);
+  }
+
+  writeDbHeaders_(vis, db);
+}
+
+function getRosterMap_(ss) {
+  const roster = ss.getSheetByName(CONFIG.rosterSheetName);
+  if (!roster) throw new Error("Missing sheet: Roster");
+
+  const lastRow = roster.getLastRow();
+  const dataRows = Math.max(0, lastRow - CONFIG.rosterHeaderRow);
+  const map = new Map();
+
+  if (dataRows === 0) return map;
+
+  const names = roster
+    .getRange(CONFIG.rosterHeaderRow + 1, CONFIG.rosterNameCol, dataRows, 1)
+    .getValues()
+    .flat()
+    .map(v => norm_(v));
+
+  const steamIds = roster
+    .getRange(CONFIG.rosterHeaderRow + 1, CONFIG.rosterSteamIdCol, dataRows, 1)
+    .getValues()
+    .flat()
+    .map(v => norm_(v));
+
+  for (let i = 0; i < names.length; i++) {
+    const n = names[i];
+    const s = steamIds[i];
+    if (n && s) map.set(n, s);
+  }
+
+  return map;
+}
+
+function getRowValuesFromCols_(sheet, row, cols) {
+  return cols.map(c => sheet.getRange(row, c).getValue());
+}
+
+function normalize_(arr, len) {
+  const out = arr.slice(0, len);
+  while (out.length < len) out.push(false);
+  return out;
+}
+
+function ensureDbCols_(dbSheet, neededLastCol) {
+  const current = dbSheet.getMaxColumns();
+  if (current < neededLastCol) {
+    dbSheet.insertColumnsAfter(current, neededLastCol - current);
+  }
+}
+
+function writeDbHeaders_(vis, db) {
+  const reqHeaders = CONFIG.visRequirementCols.map(c => vis.getRange(CONFIG.visHeaderRow, c).getValue());
+  const reqCount = reqHeaders.length;
+
+  ensureDbCols_(db, CONFIG.dbFirstReqCol + reqCount - 1);
+
+  db.getRange(CONFIG.dbHeaderRow, CONFIG.dbKeyCol).setValue("SteamID");
+  db.getRange(CONFIG.dbHeaderRow, CONFIG.dbFirstReqCol, 1, reqCount).setValues([reqHeaders]);
+}
+
+function norm_(v) {
+  return String(v || "")
+    .replace(/\u00A0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
