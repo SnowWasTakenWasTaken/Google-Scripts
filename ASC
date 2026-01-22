@@ -1,0 +1,126 @@
+// Written & Created by Major Silverback (@snown.t)
+const CFG = {
+  rosterSheetName: "Notes Entry",
+  dbSheetName: "ASC DB (HIDE)",
+
+  firstDataRow: 6,
+
+  commitRow: 6,
+  colSteamId: 4,
+  colNewNote: 7,
+  colCommit: 8,
+  colReset: 9,
+};
+// If there are any changes in the layout of the sheet in the future update / modify the config in the lines above ^
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu("ASC")
+    .addItem("Commit Notes Now", "commitAscNotes_")
+    .addToUi();
+}
+
+function onEdit(e) {
+  if (!e || !e.range) return;
+
+  const sheet = e.range.getSheet();
+  if (sheet.getName() !== CFG.rosterSheetName) return;
+
+  const isCommitCell =
+    e.range.getRow() === CFG.commitRow &&
+    e.range.getColumn() === CFG.colCommit;
+
+  if (!isCommitCell) return;
+  if (e.value !== "TRUE") return;
+
+  commitAscNotes_();
+  sheet.getRange(CFG.commitRow, CFG.colCommit).setValue(false);
+}
+
+function commitAscNotes_() {
+  const ss = SpreadsheetApp.getActive();
+  const roster = ss.getSheetByName(CFG.rosterSheetName);
+  const db = ss.getSheetByName(CFG.dbSheetName);
+
+  if (!roster) throw new Error(`Missing sheet: ${CFG.rosterSheetName}`);
+  if (!db) throw new Error(`Missing sheet: ${CFG.dbSheetName}`);
+
+  const lastRow = roster.getLastRow();
+  if (lastRow < CFG.firstDataRow) {
+    ss.toast("ASC: No roster rows found.", "ASC");
+    return;
+  }
+
+  const dbLastRow = db.getLastRow();
+  const dbValues =
+    dbLastRow >= 2 ? db.getRange(2, 1, dbLastRow - 1, 4).getValues() : [];
+
+  const dbMap = new Map();
+  for (let i = 0; i < dbValues.length; i++) {
+    const steamId = String(dbValues[i][0] || "").trim();
+    if (steamId) dbMap.set(steamId, i + 2);
+  }
+
+  const numRows = lastRow - CFG.firstDataRow + 1;
+  const rosterValues = roster
+    .getRange(CFG.firstDataRow, 1, numRows, CFG.colReset)
+    .getValues();
+
+  const updates = [];
+  for (let i = 0; i < rosterValues.length; i++) {
+    const row = rosterValues[i];
+    const steamId = String(row[CFG.colSteamId - 1] || "").trim();
+    if (!steamId) continue;
+
+    const newNote = String(row[CFG.colNewNote - 1] || "").trim();
+    const reset = row[CFG.colReset - 1] === true;
+
+    if (reset) {
+      updates.push({ steamId, note: "" });
+      continue;
+    }
+
+    if (!newNote) continue;
+
+    updates.push({ steamId, note: newNote });
+  }
+
+  if (!updates.length) {
+    ss.toast("ASC: Nothing to commit (no New Notes / no Resets).", "ASC");
+    return;
+  }
+
+  const now = new Date();
+  const user = Session.getActiveUser().getEmail() || "";
+  const rowsToAppend = [];
+
+  for (const u of updates) {
+    const dbRow = dbMap.get(u.steamId);
+
+    if (dbRow) {
+      db.getRange(dbRow, 2).setValue(u.note);
+      db.getRange(dbRow, 3).setValue(now);
+      db.getRange(dbRow, 4).setValue(user);
+    } else {
+      rowsToAppend.push([u.steamId, u.note, now, user]);
+    }
+  }
+
+  if (rowsToAppend.length) {
+    db.getRange(db.getLastRow() + 1, 1, rowsToAppend.length, 4)
+      .setValues(rowsToAppend);
+  }
+
+  const acted = new Set(updates.map(u => u.steamId));
+  for (let i = 0; i < rosterValues.length; i++) {
+    const steamId = String(
+      rosterValues[i][CFG.colSteamId - 1] || ""
+    ).trim();
+    if (!acted.has(steamId)) continue;
+
+    const sheetRow = CFG.firstDataRow + i;
+    roster.getRange(sheetRow, CFG.colNewNote).clearContent();
+    roster.getRange(sheetRow, CFG.colReset).setValue(false);
+  }
+
+  ss.toast(`ASC: Committed ${updates.length} change(s).`, "ASC");
+} 
